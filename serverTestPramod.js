@@ -6940,6 +6940,22 @@ const getReason = async (hotelID) => {
 };
 
 
+////////////// This is the function to Reason from reason
+const getReasonByID = async (reasonGroupID) => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT id,reasonCode FROM reason where reasonGroupID=?`;
+    const values = [reasonGroupID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+
 ////////////// This is the function to get marketGroup from the Database
 const getMarketCodeMarketGroupID = async (hotelID) => {
   return new Promise((resolve, reject) => {
@@ -10972,6 +10988,38 @@ app.get("/getReason", async (req, res) => {
 });
 
 
+// API to Get Reason from Reason
+app.get("/getReasonByID", async (req, res) => {
+  try {
+    let reasonGroupID = req.query['reasonGroupID']
+    const result = await getReasonByID(reasonGroupID);
+    for (i = 0; i < result.length; i++) {
+      // console.log(result[i])
+      result[i]['value'] = result[i]['id'];
+      result[i]['label'] = result[i]['reasonCode']
+      delete result[i]['reasonCode'];
+      delete result[i]['id'];
+
+    }
+    // const hotelID=req.query['hotelID']
+    res.status(200).send({
+      status: 'Success',
+      statusCode: res.statusCode,
+      message: 'Reason data Fetched Successfully',
+      data: result
+    })
+  }
+  catch (error) {
+    res.status(403).send({
+      status: 'Failed',
+      statusCode: res.statusCode,
+      message: 'Forbidden'
+    })
+  }
+
+});
+
+
 
 // API to Get marketGroup Data
 app.get("/getmarketcodemarketgroupid", async (req, res) => {
@@ -13317,30 +13365,38 @@ const updateIDDetails = async (columnsToUpdate, id) => {
 
 
 /// Update Function to  updateRoomStatus
-const updateRoomStatus = async (columnsToUpdate, id) => {
+const updateRoomStatus = async (roomStatus, id) => {
+  const roomData = await getRoomById(id)
   return new Promise((resolve, reject) => {
-
-    let query = 'UPDATE room SET ';
-    let values = [];
-    for (let column in columnsToUpdate) {
-      if (columnsToUpdate.hasOwnProperty(column)) {
-        query += `${column} = ?, `;
-        values.push(columnsToUpdate[column]);
-      }
-    }
-    query = query.slice(0, -2);
-    query += ` WHERE id = ${id}`;
-    connection.query(query, values, (err, result) => {
-      if (err) {
-        console.log(err)
-        reject(err);
+    if (roomStatus != '' && roomStatus != null && roomStatus != undefined) {
+      if (roomData[0]['roomStatus'] != roomStatus) {
+        if (roomData[0]['roomStatus'] != 'Out Of Order' && roomData[0]['roomStatus'] != 'Out Of Service') {
+          let query = 'UPDATE room SET roomStatus=? where id=?';
+          let values = [roomStatus, id];
+          connection.query(query, values, (err, result) => {
+            if (err) {
+              console.log(err)
+              reject(err);
+            }
+            else {
+              resolve(result);
+            }
+          })
+        }
+        else {
+          reject('Room is ' + roomData[0]['roomStatus'] + ' release the room first')
+        }
       }
       else {
-        console.log(`Successfully updated ${Object.keys(columnsToUpdate).length} columns`);
-        resolve(result);
+        reject("Room is already " + roomStatus + "")
       }
-    })
+    }
+    else {
+      reject("Please select room status")
+    }
+
   })
+
 };
 
 
@@ -13755,12 +13811,11 @@ app.put('/updateblock', async (req, res) => {
 });
 
 
-//API to update Payment Type
+//API to update Room Status
 app.put('/updateRoomStatus', async (req, res) => {
   try {
-    const columnsToUpdate = req.body;
-    const id = req.query['id'];
-    const result = await updateRoomStatus(columnsToUpdate, id);
+    const { roomStatus, id } = req.body;
+    const result = await updateRoomStatus(roomStatus, id);
     res.status(200).send({
       status: 'success',
       statusCode: res.statusCode,
@@ -13769,17 +13824,18 @@ app.put('/updateRoomStatus', async (req, res) => {
     })
   }
   catch (error) {
+    console.log(error)
     res.status(403).send({
       status: "Failed",
       statusCode: 403,
-      message: "Forbidden"
+      message: error
     })
   }
 });
 
 
 //API to update Booker  
-app.put('/uodatebooker', async (req, res) => {
+app.put('/updatebooker', async (req, res) => {
   try {
     const columnsToUpdate = req.body;
     const id = req.query['id'];
@@ -14567,7 +14623,7 @@ app.get("/getRoomCount", async (req, res) => {
 /// This is the function is to get 
 const getRoomInformation = async (floorID) => {
   return new Promise((resolve, reject) => {
-    const sql = `SELECT room.id,frontOfficeStatus,roomStatus,roomNumber,roomType.roomType FROM room INNER JOIN roomType on roomTypeID=roomType.id WHERE floorID=?`;
+    const sql = `SELECT room.id,room.reservationStatus,frontOfficeStatus,roomStatus,roomNumber,roomType.roomType FROM room INNER JOIN roomType on roomTypeID=roomType.id WHERE floorID=?`;
     const values = [floorID]
     connection.query(sql, values, (error, result) => {
       if (error) {
@@ -17639,176 +17695,222 @@ const getAllGuestDetails = async () => {
 };
 
 
+const getRoomWiseInventoryByDateRoomID = async (roomID, fromDate, toDate) => {
+  return new Promise((resolve, reject) => {
+    for (let i = 0; i < roomID.length; i++) {
+      const sql = `SELECT * from roomWiseInventory WHERE roomID=? AND occupancy_date BETWEEN ? AND ?`;
+      values = [roomID[i], fromDate, toDate]
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          // console.log(result)
+          resolve(result);
+        }
+      });
+    }
+  });
+};
+
+
 // For Adding Out Of Order Or Service
 const addOutOfOrderAndService = async (fromDate, startTime, toDate, endTime, status, returnStatus, remarks, reasonID, roomID) => {
+
+  // let notSameStatus = await getRoomWiseInventory(fromDate)
+  let notSameStatus = await getRoomWiseInventoryByDateRoomID(roomID, fromDate, toDate)
+  // console.log(notSameStatus[0]['status'])
   return new Promise((resolve, reject) => {
 
     const Today = moment(new Date()).format("YYYY-MM-DD");
     let date = new Date(toDate)
     date.setDate(date.getDate() - 1);
     let oneLessDate = moment(new Date(date)).format("YYYY-MM-DD")
-    // roomID = JSON.parse(roomID)
-    // console.log("++++++++++")
-    // console.log(roomID)
-    // console.log(nayu1[0])
-    if (fromDate >= Today) {
 
-      for (let i = 0; i < roomID.length; i++) {
-        // nayu.push(roomID[i])
+    if (fromDate === Today && toDate === Today && notSameStatus[0]['status'] === 'Out Of Order' || notSameStatus[0]['status'] === 'Out Of Service') {
+      reject(new Error('Room is ' + notSameStatus[0]['status'] + ' you cannot add ' + status + ' same day.'))
+    }
+    else {
+      if (fromDate >= Today) {
 
-        const query1 = `SELECT distinct roomTypeID FROM room WHERE id in (?)`;
-        // console.log(query1)
-        connection.query(query1, roomID[i], (error, result) => {
-          console.log("===================")
-          console.log(result)
-          console.log("=====================")
-          if (error || result.length == 0) {
-            reject(error);
-          }
+        for (let i = 0; i < roomID.length; i++) {
+          // nayu.push(roomID[i])
 
-          else {
+          const query1 = `SELECT distinct roomTypeID FROM room WHERE id in (?)`;
+          // console.log(query1)
+          connection.query(query1, roomID[i], (error, result) => {
+            // console.log("===================")
+            // console.log(result)
+            // console.log("=====================")
+            if (error || result.length == 0) {
+              reject(error);
+            }
 
-            const roomTypeID = result[0].roomTypeID;
-            // console.log(roomTypeID)
-            const query2 = 'SELECT * FROM roomWiseInventory WHERE occupancy_date BETWEEN "' + fromDate + '" AND "' + toDate + '" AND roomID = "' + roomID[i] + '" AND reservationID IS NOT NULL';
-            connection.query(query2, (error, result) => {
-              if (error) {
-                reject(error);
-              } else {
-                if (result.length) {
-                  // console.log(result.length)
-                  reject(new Error('Room Already Occupied/Reserved'));
+            else {
+
+              const roomTypeID = result[0].roomTypeID;
+              // // console.log(roomTypeID)
+              // if (fromDate === Today && toDate === Today) {
+              //   const query2 = 'SELECT * FROM roomWiseInventory WHERE occupancy_date BETWEEN "' + fromDate + '" AND "' + toDate + '" AND roomID = "' + roomID[i] + '" AND reservationID IS NOT NULL';
+              //   connection.query(query2, (error, result) => {
+              //     if (error) {
+              //       reject(error);
+              //     } else {
+              //       if (result.length) {
+              //         reject(new Error('Room Already Occupied/Reserved'));
+              //       }
+              //     }
+              //   })
+              // }
+              if (fromDate === Today && toDate === Today) {
+                var LastDate = toDate
+              }
+              else {
+                var LastDate = oneLessDate
+
+              }
+              const query2 = 'SELECT * FROM roomWiseInventory WHERE occupancy_date BETWEEN "' + fromDate + '" AND "' + LastDate + '" AND roomID = "' + roomID[i] + '" AND reservationID IS NOT NULL';
+              connection.query(query2, (error, result) => {
+                if (error) {
+                  reject(error);
                 } else {
-                  const query3 = 'SELECT numAvlRooms FROM roomInventory WHERE inventory_date BETWEEN "' + fromDate + '"  AND "' + toDate + '" AND roomTypeID = ' + roomTypeID + ' AND numAvlRooms > 0';
-                  connection.query(query3, (error, result) => {
-                    if (error) {
-                      reject(error);
-                    } else {
-                      // console.log(result.length)
+                  if (result.length) {
+                    // // console.log(result.length)
+                    reject(new Error('Room Already Occupied/Reserved'));
+                  } else {
 
-                      if (!result.length) {
-                        reject(new Error('No available rooms for the given dates'));
+                    const query3 = 'SELECT numAvlRooms FROM roomInventory WHERE inventory_date BETWEEN "' + fromDate + '"  AND "' + toDate + '" AND roomTypeID = ' + roomTypeID + ' AND numAvlRooms > 0';
+                    connection.query(query3, (error, result) => {
+                      if (error) {
+                        reject(error);
+                      } else {
+                        // // console.log(result.length)
 
-                      }
-                      else {
-                        const query4 = 'SELECT * FROM room WHERE roomStatus="' + status + '" AND id="' + roomID[i] + '"';
-                        connection.query(query4, (error, result) => {
-                          if (error) {
-                            reject(error);
-                          }
-                          else {
-                            // console.log(result)
-                            // console.log(result.length)
-                            if (result.length) {
-                              // console.log(result.length)
-                              reject(new Error('Room Number is Already ' + status));
+                        if (!result.length) {
+                          reject(new Error('No available rooms for the given dates'));
+
+                        }
+                        else {
+                          const query4 = 'SELECT * FROM room WHERE roomStatus="' + status + '" AND id="' + roomID[i] + '"';
+                          connection.query(query4, (error, result) => {
+                            if (error) {
+                              reject(error);
                             }
                             else {
-                              // for (let i = 0; i < roomID.length; i++){
-                              const query4 = 'SELECT * FROM room WHERE frontOfficeStatus="Occupied" AND id="' + roomID[i] + '"';
-                              connection.query(query4, (error, result) => {
-                                if (error) {
-                                  reject(error);
-                                }
-                                else {
+                              // console.log(result)
+                              // console.log(result.length)
+                              if (result.length) {
+                                // console.log(result.length)
+                                reject(new Error('Room Number is Already ' + status));
+                              }
+                              else {
+
+
+                                const query4 = 'INSERT INTO outOfOrderAndService (fromDate, startTime, toDate, endTime, status, returnStatus, remarks, reasonID, roomID) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+                                const values = [fromDate, startTime, toDate, endTime, status, returnStatus, remarks, reasonID, roomID[i]];
+                                connection.query(query4, values, (error, result) => {
+                                  // console.log("result")
                                   // console.log(result)
-                                  // console.log(result.length)
-                                  if (result.length) {
-                                    console.log(result)
-                                    // console.log(result.length)
-                                    // for (let j = 0; j < roomID.length; j++){
-                                    // console.log(result[i]['roomNumber'])
-                                    reject(new Error('Room Number is Already Occupied'));
-                                    // }
+                                  if (error) {
+                                    reject(error);
                                   }
-
                                   else {
+                                    // if (fromDate === Today && toDate === Today) {
+                                    //   const query5 = 'UPDATE roomWiseInventory SET status="' + status + '" where roomID="' + roomID[i] + '" and occupancy_date BETWEEN "' + fromDate + '" AND "' + toDate + '"';
+                                    //   connection.query(query5, (error, result) => {
+                                    //     if (error) {
+                                    //       reject(error);
+                                    //     }
+                                    //     else {
+                                    //       resolve(result)
+                                    //     }
+                                    //   })
+                                    // }
+                                    if (fromDate === Today && toDate === Today) {
+                                      var LastDate = toDate
+                                    }
+                                    else {
+                                      var LastDate = oneLessDate
 
-                                    const query4 = 'INSERT INTO outOfOrderAndService (fromDate, startTime, toDate, endTime, status, returnStatus, remarks, reasonID, roomID) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-                                    const values = [fromDate, startTime, toDate, endTime, status, returnStatus, remarks, reasonID, roomID[i]];
-                                    connection.query(query4, values, (error, result) => {
-                                      console.log("result")
-                                      // console.log(result)
+                                    }
+                                    const query5 = 'UPDATE roomWiseInventory SET status="' + status + '" where roomID="' + roomID[i] + '" and occupancy_date BETWEEN "' + fromDate + '" AND "' + LastDate + '"';
+                                    connection.query(query5, (error, result) => {
                                       if (error) {
                                         reject(error);
                                       }
                                       else {
-                                        const query5 = 'UPDATE roomWiseInventory SET status="' + status + '" where roomID="' + roomID[i] + '" and occupancy_date BETWEEN "' + fromDate + '" AND "' + oneLessDate + '"';
-                                        connection.query(query5, (error, result) => {
+                                        const query6 = 'UPDATE room SET roomStatus= "' + status + '" where id="' + roomID[i] + '" AND roomTypeID="' + roomTypeID + '" ';
+                                        // console.log(query6)
+                                        connection.query(query6, (error, result) => {
                                           if (error) {
                                             reject(error);
                                           }
                                           else {
-                                            const query6 = 'UPDATE room SET roomStatus= "' + status + '" where id="' + roomID[i] + '" AND roomTypeID="' + roomTypeID + '" ';
-                                            console.log(query6)
-                                            connection.query(query6, (error, result) => {
-                                              if (error) {
-                                                reject(error);
-                                              }
-                                              else {
-                                                if (status === 'Out Of Order') {
-                                                  if (fromDate != toDate) {
-                                                    const query7 = 'UPDATE roomInventory SET numAvlRooms=(numAvlRooms-1) ,numOodRooms=(numOodRooms+1) where roomTypeID="' + roomTypeID + '" and inventory_date BETWEEN "' + fromDate + '" AND "' + oneLessDate + '"';
-                                                    connection.query(query7, (error, result) => {
-                                                      console.log(query7)
-                                                      if (error) {
-                                                        reject(error);
-                                                      }
-                                                      else {
-                                                        resolve(result);
-                                                      }
-                                                    });  ////=====
+                                            if (status === 'Out Of Order') {
+                                              if (fromDate != toDate) {
+                                                const query7 = 'UPDATE roomInventory SET numAvlRooms=(numAvlRooms-1) ,numOodRooms=(numOodRooms+1) where roomTypeID="' + roomTypeID + '" and inventory_date BETWEEN "' + fromDate + '" AND "' + oneLessDate + '"';
+                                                connection.query(query7, (error, result) => {
+                                                  // console.log(query7)
+                                                  if (error) {
+                                                    reject(error);
                                                   }
                                                   else {
-                                                    const query7 = 'UPDATE roomInventory SET numAvlRooms=(numAvlRooms-1) ,numOodRooms=(numOodRooms+1) where roomTypeID="' + roomTypeID + '" and inventory_date BETWEEN "' + fromDate + '" AND "' + toDate + '"';
-                                                    connection.query(query7, (error, result) => {
-                                                      console.log(query7)
-                                                      if (error) {
-                                                        reject(error);
-                                                      }
-                                                      else {
-                                                        resolve(result);
-                                                      }
-                                                    });
-                                                  } ////=====
-                                                }
-                                                else {
-                                                  resolve(result);
-                                                }
+                                                    resolve(result);
+                                                  }
+                                                });  ////=====
                                               }
-                                            });
+                                              else {
+                                                const query7 = 'UPDATE roomInventory SET numAvlRooms=(numAvlRooms-1) ,numOodRooms=(numOodRooms+1) where roomTypeID="' + roomTypeID + '" and inventory_date BETWEEN "' + fromDate + '" AND "' + toDate + '"';
+                                                connection.query(query7, (error, result) => {
+                                                  // console.log(query7)
+                                                  if (error) {
+                                                    reject(error);
+                                                  }
+                                                  else {
+                                                    resolve(result);
+                                                  }
+                                                });
+                                              }
+                                            }
+                                            else {
+                                              resolve(result);
+                                            }
                                           }
                                         });
                                       }
-
-                                    });//----------
+                                    });
                                   }
 
-                                }
-                              })
+                                });//----------
+                                // }
 
+                                // }
+                                // })
+
+                              }
                             }
-                          }
-                        })
-                      }//---------
-                    }
-                  });
+                          })
+                        }//---------
+                      }
+                    });
+                  }
                 }
-              }
-            });
+              });
 
-          }
-        });
+            }
+          });
+        }
+
+      }  ///hello
+      else {
+        reject(new Error('From Date Should Be Greater Then Or Equal to Today Date'));
+
       }
-
-    }  ///hello
-    else {
-      reject(new Error('From Date Should Be Greater Then Or Equal to Today Date'));
-
     }
 
   });
 };
+
+
 
 
 /// API for add Room Inventory
@@ -17926,8 +18028,26 @@ const outOfOrderAndServiceRelease = async (roomID, fromDate, toDate, roomTypeID,
     let oneLessDate = moment(new Date(date)).format("YYYY-MM-DD")
     // if (getRoomStatus.status != 'Released') {
     if (getOODOOS.length != 0) {
-      const sql = 'UPDATE roomWiseInventory SET status=? where roomID=? and occupancy_date BETWEEN ? AND ?';
-      const values = [getRoomStatus.returnStatus, roomID, fromDate, oneLessDate]
+      // if (fromDate === Today && toDate === Today) {
+      //   const sql = 'UPDATE roomWiseInventory SET status=? where roomID=? and occupancy_date BETWEEN ? AND ?';
+      //   const values = [getRoomStatus.returnStatus, roomID, fromDate, oneLessDate]
+      //   console.log(values)
+      //   connection.query(sql, values, (error, result) => {
+      //     if (error) {
+      //       reject(error);
+      //     } else {
+      //       resolve(result)
+      //     }
+      //   })
+      // }
+      if (fromDate === Today && toDate === Today) {
+        var LastDate = toDate
+      }
+      else {
+        var LastDate = oneLessDate
+
+      } const sql = 'UPDATE roomWiseInventory SET status=? where roomID=? and occupancy_date BETWEEN ? AND ?';
+      const values = [getRoomStatus.returnStatus, roomID, fromDate, LastDate]
       console.log(values)
       connection.query(sql, values, (error, result) => {
         if (error) {
@@ -19535,7 +19655,7 @@ app.put('/updateReservationBookingCheckIn', async (req, res) => {
 ////////////// This is the function to get Reservation from the Database.
 const getReservationForFrontDesk = async (hotelID) => {
   return new Promise((resolve, reject) => {
-    let query = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id INNER join accounts on reservation.companyID=accounts.companyid  WHERE reservation.hotelID= ? ORDER BY reservation.id DESC`
+    let query = ' SELECT DISTINCT reservation.id, reservation.tempReservationID, reservation.hotelID, reservation.bookingID, reservation.sharingID, reservation.arrivalDate, reservation.numberOfNights, reservation.departureDate, reservation.numberOfAdults, reservation.numberOfChildren, reservation.numberOfRooms, reservation.roomTypeID, reservation.room, reservation.rateCodeID, reservation.rate, reservation.roomToCharge, reservation.packageID, reservation.blockCodeID, reservation.ETA, reservation.ETD, reservation.reservationTypeID, reservation.reservationStatus, reservation.marketID, reservation.sourceID, reservation.origin, reservation.paymentTypeID,reservation.cardDetailsID, reservation.balance, reservation.splitBy, reservation.companyID, reservation.agentID, reservation.bookerID, reservation.printRate, reservation.reservationStatusID, reservation.commission, reservation.totalDiscount, reservation.totalBaseAmount, reservation.totalExtraCharge, reservation.totalTax, reservation.totalPayment, reservation.stayTotal, reservation.travelAgentCommission, reservation.totalCostOfStay, reservation.pickUpID, reservation.dropID, reservation.comments, reservation.billingInstruction,reservation.uniqueID, reservation.subBookingID, reservation.transactionID, reservation.voucherNumber, reservation.doNotMove, reservation.noPost, reservation.isMain  , room.roomNumber,reservation.roomTypeID,  roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID, companyInformation.source as Type, booker.name as bookerName, reservationType.description as reservationTypeDescription, GROUP_CONCAT(reservationPreference.description) as preference,GROUP_CONCAT(reservationPreference.id) as preferenceID,GROUP_CONCAT(extra.description) as extra, GROUP_CONCAT(extra.id) as extraID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id LEFT JOIN companyInformation ON reservation.tempReservationID = companyInformation.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id LEFT join accounts on reservation.companyID=accounts.companyid LEFT JOIN reservationType ON reservation.reservationTypeID= reservationType.id LEFT JOIN booker ON booker.id = reservation.bookerID LEFT JOIN reservationPreferences on reservationPreferences.reservationID=reservation.id  LEFT JOIN reservationExtras on reservationExtras.reservationID=reservation.id LEFT JOIN extra on extra.id=reservationExtras.extraID LEFT JOIN reservationPreference on reservationPreference.id=reservationPreferences.preferenceID WHERE reservation.hotelID=1 group by reservation.id ORDER BY reservation.id DESC'
     let values = [hotelID]
     if ((hotelID == undefined || hotelID == '')) {
       console.log("ERROR ,Parameters missing")
@@ -19584,7 +19704,7 @@ app.get('/getReservationForFrontDesk', async (req, res) => {
 ////////////// This is the function to get Reservation from the Database.
 const getReservationForFrontDeskToday = async (Start) => {
   return new Promise((resolve, reject) => {
-    let query = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id INNER join accounts on reservation.companyID=accounts.companyid  WHERE reservation.arrivalDate= ?`
+    let query = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id left join accounts on reservation.companyID=accounts.companyid  WHERE reservation.arrivalDate= ?`
     let values = [Start]
     // console.log(values)
     if ((Start == undefined || Start == '')) {
@@ -19722,7 +19842,7 @@ app.get('/getReservationForFrontDeskTomarrow', async (req, res) => {
 /// This is the function is to get Booking Tran by Departures
 const getReservationForFrontDeskDepartures = async (End) => {
   return new Promise((resolve, reject) => {
-    let sql = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id INNER join accounts on reservation.companyID=accounts.companyid  WHERE reservation.departureDate= ?`
+    let sql = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id left join accounts on reservation.companyID=accounts.companyid  WHERE reservation.departureDate= ?`
     const values = [End]
     connection.query(sql, values, (error, result) => {
       if (error) {
@@ -19764,7 +19884,7 @@ app.get("/getReservationForFrontDeskDepartures", async (req, res) => {
 /// This is the function is to get In House Guest by in house guest
 const getReservationForFrontDeskInHouseGuest = async (reservationStatus) => {
   return new Promise((resolve, reject) => {
-    let sql = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,balance,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id INNER join accounts on reservation.companyID=accounts.companyid  WHERE reservation.reservationStatus='Checked In' OR reservation.reservationStatus='Due Out'`;
+    let sql = `SELECT reservation.id,guestID,bookingID,sharingID,arrivalDate,departureDate,reservation.reservationStatus,reservation.room,room.roomNumber,reservation.roomTypeID,balance,roomType.roomType,reservation.agentID,reservation.marketID,marketCode.marketCode,reservation.sourceID,source.sourceCode,paymentTypeID,reservation.companyID,accounts.accountName,guestID,guestProfile.name,rateCodeID,rateCode.rateCode,origin,paymentTypeID,subBookingID FROM reservation inner JOIN roomType on roomType.id=reservation.roomTypeID LEFT JOIN room on room.id=reservation.room INNER JOIN rateCode on rateCode.id=reservation.rateCodeID INNER JOIN source on reservation.sourceID=source.id INNER JOIN guestProfile on guestProfile.id=reservation.guestID INNER JOIN marketCode on reservation.marketID=marketCode.id LEFT join accounts on reservation.companyID=accounts.companyid  WHERE reservation.reservationStatus='Checked In' OR reservation.reservationStatus='Due Out'`;
     const values = [reservationStatus]
     connection.query(sql, values, (error, result) => {
       if (error) {
@@ -20563,14 +20683,10 @@ const getRoomsForRoomMove = async (fromDate, toDate, floorID, roomType) => {
     // const sql = `SELECT DISTINCT roomID,room.roomNumber,room.frontOfficeStatus,room.roomStatus,roomType.roomType FROM roomWiseInventory INNER JOIN room on room.id=roomWiseInventory.roomID INNER join roomType on roomType.id=room.roomTypeID  WHERE roomWiseInventory.roomID NOT IN (SELECT roomID FROM roomWiseInventory WHERE status IN ('Out Of Order', 'Out Of Service') AND occupancy_date BETWEEN ? AND ?) and reservationID is null AND room.floorID=? and room.roomStatus NOT IN ('Out Of Order', 'Out Of Service')`;
     const sql = `SELECT DISTINCT roomID,room.id,room.roomNumber,room.frontOfficeStatus,room.roomStatus,roomType.roomType FROM roomWiseInventory INNER JOIN room on room.id=roomWiseInventory.roomID INNER join roomType on roomType.id=room.roomTypeID WHERE roomWiseInventory.roomID NOT IN (SELECT roomID FROM roomWiseInventory WHERE status IN ('Out Of Order', 'Out Of Service') AND occupancy_date BETWEEN ? AND ?) and reservationID is null AND room.floorID=? and room.roomStatus NOT IN ('Out Of Order', 'Out Of Service') AND room.frontOfficeStatus NOT IN ('Occupied') AND  room.roomStatus='Inspected' AND occupancy_date BETWEEN ? AND ? and roomType.roomType=?`;
     const values = [fromDate, toDate, floorID, fromDate, toDate, roomType]
-    // console.log(sql)
-    console.log(values)
     connection.query(sql, values, (error, result) => {
       if (error) {
-        // console.log(error) 
         reject(error);
       } else {
-        // console.log(result) 
         resolve(result);
       }
     });
@@ -21112,7 +21228,7 @@ const UpdateCancelCheckIn = async (hotelID, reservationID, sharerID, roomID, rea
           }
           else {
             const sql = `UPDATE reservation SET reservationStatus=? WHERE id=?`
-            const values = ['Assigned', reservationID];
+            const values = ['Due In', reservationID];
             connection.query(sql, values, (error, result) => {
               if (error) {
                 reject(error);
@@ -21294,6 +21410,7 @@ const addRoomUnassign = async (hotelID, reservationID, sharingID, roomID, reason
 const UnAssignRoom = async (sharingID, roomID, hotelID, reasonID, reasonText) => {
   console.log(sharingID, roomID, hotelID, reasonID, reasonText)
   console.log(sharingID, roomID)
+  const resDate = await getSharer(sharingID)
   return new Promise((resolve, reject) => {
     const Today = moment(new Date()).format("YYYY-MM-DD");
     const sql = `SELECT * FROM reservation WHERE sharingID=?`
@@ -21310,9 +21427,17 @@ const UnAssignRoom = async (sharingID, roomID, hotelID, reasonID, reasonText) =>
           if (Today <= result1[0]['arrivalDate']) {
             if (result1[0]['reservationStatus'] != 'Checked In') {
               for (let i = 0; i < result1.length; i++) {
-                console.log(result1[i]['id'])
+                // console.log(resDate[i]['arrivalDate'])
+
+                if (resDate[i]['arrivalDate'] === Today) {
+                  var reservationStatus = 'Due In'
+                }
+                else {
+                  var reservationStatus = 'Reserved'
+
+                }
                 const sql = `UPDATE reservation SET room=?,reservationStatus=? WHERE id=?`
-                const values = [null, 'Reserved', result1[i]['id']];
+                const values = [null, reservationStatus, result1[i]['id']];
                 connection.query(sql, values, (error, result) => {
                   if (error) {
                     reject(error);
@@ -21413,33 +21538,58 @@ const UpdateAssignRoom = async (sharingID, roomID, fromDate, toDate, frontOffice
             if (result1[i]['reservationStatus'] != 'Assigned') {
 
               let updateRates = updateDailyDetails(roomID, result1[i]['id'], fromDate, toDate);
+              if (fromDate === Today && toDate === Today) {
+                var LastDate = toDate
+              }
+              else {
+                var LastDate = oneLessDate
 
+              }
               const sql = 'UPDATE roomWiseInventory SET reservationID=?,mainReservationID=? Where roomID=? and occupancy_date BETWEEN ? and ?'
-              const values = [result1[i]['id'], result1[i]['id'], roomID, fromDate, oneLessDate];
+              const values = [result1[i]['id'], result1[i]['sharingID'], roomID, fromDate, oneLessDate];
               console.log(values)
               connection.query(sql, values, (error, result) => {
                 if (error) {
                   reject(error);
                 } else {
+                  //     resolve(result)
+                  //   }
+                  // })
                   // resolve(result);
-                  const sql = 'UPDATE room SET frontOfficeStatus=? Where id=?'
-                  const values = [frontOfficeStatus, roomID];
+                  // resolve(result);
+                  const sql = 'UPDATE reservation SET room=?,reservationStatus=? Where id=?'
+                  const values = [roomID, 'Assigned', result1[i]['id']];
                   console.log(values)
                   connection.query(sql, values, (error, result) => {
                     if (error) {
                       reject(error);
                     } else {
                       // resolve(result);
-                      const sql = 'UPDATE reservation SET room=?,reservationStatus=? Where id=?'
-                      const values = [roomID, 'Assigned', result1[i]['id']];
-                      console.log(values)
-                      connection.query(sql, values, (error, result) => {
-                        if (error) {
-                          reject(error);
-                        } else {
-                          resolve(result);
-                        }
-                      });
+
+                      if (fromDate === Today) {
+                        const sql = 'UPDATE room SET reservationStatus=? Where id=?'
+                        const values = ["Arrivals", roomID];
+                        console.log(values)
+                        connection.query(sql, values, (error, result) => {
+                          if (error) {
+                            reject(error);
+                          } else {
+                            resolve(result)
+                          }
+                        });
+                      }
+                      else {
+                        const sql = 'UPDATE room SET reservationStatus=? Where id=?'
+                        const values = ["Reserved", roomID];
+                        console.log(values)
+                        connection.query(sql, values, (error, result) => {
+                          if (error) {
+                            reject(error);
+                          } else {
+                            resolve(result)
+                          }
+                        });
+                      }
                     }
                   });
                 }
@@ -21910,7 +22060,7 @@ const getRateCodeSelectionModification = async (hotelID, ratecode, checkin, chec
       + (parseInt(children)) + `) as total ,(((rateCodeRoomRate.oneAdultPrice)  + (rateCodeRoomRate.extraAdultPrice) * `
       + (parseInt(adults) - 1) +
       `+ (rateCodeRoomRate.extraChildPrice) * `
-      + (parseInt(children)) + `)*` + (parseInt(diffInDays + 1)) + ` )` + ` as fulltotal,  
+      + (parseInt(children)) + `)*` + (parseInt(diffInDays)) + ` )` + ` as fulltotal,  
     roomInventory.numAvlRooms, roomType.roomType, package.packageCode, rateCode.packageID  FROM roomInventory INNER JOIN roomType on roomInventory.roomTypeID = roomType.id INNER JOIN rateCodeRoomRate ON rateCodeRoomRate.roomTypeID=roomInventory.roomTypeID INNER JOIN rateCode ON rateCodeRoomRate.rateCodeID=rateCode.id INNER JOIN package on package.id = rateCode.packageID where rateCodeRoomRate.hotelID = ? and rateCodeRoomRate.rateCodeID = ? and date(rateCode.endSellDate) >= date('`+ checkout + `')` + `and (roomInventory.inventory_date between '` + checkin + `' and '` + checkout + `')  AND roomInventory.roomTypeID=?`
     console.log(sql)
     const values = [hotelID, ratecode, roomTypeID];
@@ -21972,8 +22122,8 @@ const getRateCodeSelectionfitModification = async (ratecode, checkin, checkout, 
             + (roomInventory.extraAdultPrice) * ` + (parseInt(adults) - 1) + `+ (roomInventory.extraChildPrice) * ` + (parseInt(children)) + `) as total , (((roomInventory.baseAmount)  + (roomInventory.extraAdultPrice) * `
       + (parseInt(adults) - 1) +
       `+ (roomInventory.extraChildPrice) * `
-      + (parseInt(children)) + `)*` + (parseInt(diffInDays + 1)) + ` )` + ` as fulltotal,
-            roomInventory.numAvlRooms,  roomType.roomType, package.packageCode, rateCode.packageID  FROM roomInventory INNER JOIN roomType on roomInventory.roomTypeID = roomType.id INNER JOIN rateCode on rateCode.id = 1 INNER JOIN package on package.id = rateCode.packageID WHERE (roomInventory.inventory_date between '` + checkin + `' and '` + checkout + `') AND roomType.id=` + roomTypeID + ``
+      + (parseInt(children)) + `)*` + (parseInt(diffInDays)) + ` )` + ` as fulltotal,
+            roomInventory.numAvlRooms,  roomType.roomType, package.packageCode, rateCode.packageID  FROM roomInventory INNER JOIN roomType on roomInventory.roomTypeID = roomType.id INNER JOIN rateCode on rateCode.id = 1 INNER JOIN package on package.id = rateCode.packageID WHERE (roomInventory.inventory_date between '` + checkin + `' and '` + checkout + `') AND roomType.id=` + roomTypeID
     console.log(sql)
     const values = [ratecode];
     connection.query(sql, values, (error, result) => {
@@ -22006,7 +22156,6 @@ const getRateCodeSelectionfitModification = async (ratecode, checkin, checkout, 
         // const array = []
         // array.push(dataByRoomTypeID)
         rateCode[0]['RoomTypeWiseDetails'] = dataByRoomTypeID
-        console.log(rateCode)
         resolve(rateCode);
       }
     }
@@ -22052,6 +22201,7 @@ const getBookingInformation = async (tempReservationID) => {
 
 //Function to get Room Type Modification Rates
 const getRoomTypeModifiedRates = async (tempReservationID, newRoomTypeID) => {
+
   const dummyData = await getDummyReservationData(tempReservationID)
   const availability = await CheckAvailability(newRoomTypeID, dummyData[0]['checkIn'], dummyData[0]['checkOut'])
   const bookingInfo = await getBookingInformation(tempReservationID)
@@ -22100,11 +22250,13 @@ const getRoomTypeModifiedRates = async (tempReservationID, newRoomTypeID) => {
 
 
 //API to update guest complaint
-app.put('/getRoomTypeModifiedRates', async (req, res) => {
+app.post('/getRoomTypeModifiedRates', async (req, res) => {
   try {
     const { tempReservationID, newRoomTypeID } = req.body
+    console.log(tempReservationID, newRoomTypeID)
     // const updateBookingInfo = await updateBookingInformation(tempReservationID,newRoomTypeID)
     const result = await getRoomTypeModifiedRates(tempReservationID, newRoomTypeID);
+    // console.log(result)
     res.status(200).send({
       status: 'success',
       statuscode: res.statusCode,
@@ -22186,15 +22338,17 @@ const updateRoomTypeModification = async (newRoomTypeID, reservationID, oldRoomT
 // Modify room type with or without rates
 app.put('/RoomTypeModifyWithRatesorWithout', async (req, res) => {
   try {
-    const { newRoomTypeID, reservationID, oldRoomTypeID, fromDate, toDate, quantity,checkBox, rateData } = req.body
+    const { newRoomTypeID, reservationID, oldRoomTypeID, fromDate, toDate, quantity, checkBox, rateData, hotelID, sharingID, fromRoomTypeID, toRoomTypeID, reasonID, reasonText } = req.body
     const result = await updateRoomTypeModification(newRoomTypeID, reservationID, oldRoomTypeID, fromDate, toDate, quantity);
-    if(checkBox===1){
-    const getRes = await getReservationByID(reservationID)
-    const updateBookingInfo = await updateBookingInformation(getRes[0]['tempReservationID'], newRoomTypeID,rateData)
-    const data = await getCompleteReservation(getRes[0]['tempReservationID'])
-    const addData = await addDailyDetailsOfReservationWithDelete(getRes[0]['tempReservationID'], getRes[0]['sharingID'], data)
-    const updateRes = await updateReservationDetails(data,reservationID)
-  }
+    if (checkBox === 1) {
+      const getRes = await getReservationByID(reservationID)
+      const updateBookingInfo = await updateBookingInformation(getRes[0]['tempReservationID'], newRoomTypeID, rateData)
+      const data = await getCompleteReservation(getRes[0]['tempReservationID'])
+      const addData = await addDailyDetailsOfReservationWithDelete(reservationID, getRes[0]['sharingID'], data)
+      const updateRes = await updateReservationDetails(data, reservationID)
+    } else {
+      const ReasonCapture = await addRoomMove(hotelID, reservationID, sharingID, fromRoomTypeID, toRoomTypeID, null, null, reasonID, reasonText)
+    }
 
     res.status(200).send({
       status: 'success',
@@ -22244,18 +22398,24 @@ const getCompleteReservation = async (reservationID) => {
   return new Promise((resolve, reject) => {
     const sql = `SELECT companyInformation.id, companyInformation.companyID, companyInformation.guestProfileID,
     dummyReservation.checkIn, dummyReservation.checkOut, dummyReservation.adults, dummyReservation.children, dummyReservation.quantity,
-    bookingInformation.rateCodeID, bookingInformation.rateCode, bookingInformation.marketID, bookingInformation.sourceID, bookingInformation.packageID, bookingInformation.packageCode, bookingInformation.extraID, bookingInformation.extraCode, bookingInformation.roomTypeID, bookingInformation.baseprice, bookingInformation.inventory_date, bookingInformation.extraadultprice, bookingInformation.childrenprice, bookingInformation.total,
-    resPaymentInformation.paymentTypeID, resPaymentInformation.cardNumber, resPaymentInformation.cvv, resPaymentInformation.cardHolderName, resPaymentInformation.expiryDate, 
+    bookingInformation.rateCodeID, bookingInformation.rateCode, bookingInformation.marketID, bookingInformation.sourceID, bookingInformation.packageID, bookingInformation.packageCode, bookingInformation.extraID, bookingInformation.extraCode, bookingInformation.roomTypeID, bookingInformation.baseprice, bookingInformation.inventory_date, bookingInformation.extraadultprice,bookingInformation.packageRate,bookingInformation.adults as Adults,bookingInformation.children as Childrens,bookingInformation.packageID as bookingPackageID, bookingInformation.childrenprice, bookingInformation.total,
+    resPaymentInformation.paymentTypeID, resPaymentInformation.cardNumber, resPaymentInformation.authorizationID, resPaymentInformation.cardHolderName, resPaymentInformation.amount, resPaymentInformation.expiryDate, 
     pickUpDetails.pickUpDate, pickUpDetails.pickUpTime, pickUpDetails.pickUpStationCode, pickUpDetails.dropDate, pickUpDetails.dropTime, pickUpDetails.dropStationCode, pickUpDetails.pickUpCarrierCode, pickUpDetails.pickUpTransportType, pickUpDetails.pickupRemarks, pickUpDetails.dropRemarks, pickUpDetails.dropTransportType, pickUpDetails.dropCarrierCode, pickUpDetails.id as pickUpID,
-    tempExtra.extraDescription, tempExtra.source, tempExtra.agent, tempExtra.origin, tempExtra.market, tempExtra.ETA, tempExtra.ETD, tempExtra.resType, tempExtra.booker, tempExtra.package, tempExtra.features as preferenceID, tempExtra.comment,  tempExtra.billingInstructions,
-    package.totalAmount as packageRate
+    tempExtra.extraDescription, tempExtra.source, tempExtra.agent, tempExtra.origin, tempExtra.market, tempExtra.ETA, tempExtra.ETD, tempExtra.resType, tempExtra.booker, tempExtra.features as preferenceID, tempExtra.comment,  tempExtra.billingInstructions, tempExtra.blockCode, tempExtra.doNotMove, tempExtra.printRate,tempExtra.groupName, marketCode.description as marketName, source.description as sourceName, extra.description as extraName, accounts.accountName Agent, reservationType.description as ReservationType, reservationPreference.description as
+    preferenceName, paymentType.description as paymentType
     FROM companyInformation 
     INNER JOIN dummyReservation ON companyInformation.id = dummyReservation.reservationID 
     INNER JOIN bookingInformation ON companyInformation.id = bookingInformation.reservationID
     INNER JOIN resPaymentInformation ON companyInformation.id = resPaymentInformation.reservationID
-    INNER JOIN pickUpDetails ON companyInformation.id = pickUpDetails.reservationID
-    INNER JOIN tempExtra ON companyInformation.id = tempExtra.reservationID 
-    INNER JOIN package ON package.packageCode = tempExtra.package
+    LEFT JOIN pickUpDetails ON companyInformation.id = pickUpDetails.reservationID
+    LEFT JOIN tempExtra ON companyInformation.id = tempExtra.reservationID 
+    LEFT JOIN marketCode ON marketCode.id = tempExtra.market
+    LEFT JOIN source ON source.id = tempExtra.source
+    LEFT JOIN extra ON extra.id = tempExtra.extraDescription
+    LEFT JOIN accounts ON accounts.companyid = tempExtra.agent
+    INNER JOIN reservationType on reservationType.id = tempExtra.resType    
+    INNER JOIN paymentType on paymentType.id = resPaymentInformation.paymentTypeID
+    LEFT JOIN reservationPreference on reservationPreference.id = tempExtra.features
     WHERE companyInformation.id = ?`;
     // console.log(sql)
     values = [reservationID]
@@ -22458,7 +22618,7 @@ const RoomInventoryRoomType = async (oldRoomTypeID, newRoomTypeID, fromDate, toD
 };
 
 ///This is the Function to store RateCode Selection to Database for reservation////////
-const updateBookingInformation = async (tempReservationID, newRoomTypeID,result) => {
+const updateBookingInformation = async (tempReservationID, newRoomTypeID, result) => {
 
 
   // const result = await getRoomTypeModifiedRates(tempReservationID, newRoomTypeID)
@@ -22508,46 +22668,1298 @@ const updateBookingInformation = async (tempReservationID, newRoomTypeID,result)
 
 
 //Function to update Main Reservation
-const updateReservationDetails = async (result,reservationID) => {
+const updateReservationDetails = async (result, reservationID) => {
   let availability = await CheckAvailability(result[0]['roomTypeID'], result[0]['checkIn'], result[0]['checkOut'])
-      return new Promise((resolve, reject) => {
-          let totaltax = 0;
-          let totalBaseAmount = 0;
-       
-         
-        
-          for (j = 0; j < result.length; j++) {
-              totalBaseAmount += result[j]['total']
+  return new Promise((resolve, reject) => {
+    let totaltax = 0;
+    let totalBaseAmount = 0;
+
+
+
+    for (j = 0; j < result.length; j++) {
+      totalBaseAmount += result[j]['total']
+    }
+    for (i = 0; i < result.length; i++) {
+      let tax = 0;
+      if (result[i]['total'] < 1000) {
+        tax = 0;
+      }
+      else if (1000 <= result[i]['total'] < 7500) {
+        tax = result[i]['total'] * 0.12
+      }
+      else {
+        tax = result[i]['total'] * 0.18
+      }
+      totaltax = totaltax + tax
+    }
+
+    let stayTotal = totalBaseAmount + totaltax;
+    let totalCostOfStay = stayTotal * result[0]['quantity']
+
+    const reservationQuery = `UPDATE reservation SET rate=?,totalBaseAmount=?,totalTax=?,stayTotal=?, totalCostOfStay=? where id=?`
+
+    const reservationValues = [result[0]['baseprice'], totalBaseAmount, totaltax, stayTotal, totalCostOfStay, reservationID]
+
+    connection.query(reservationQuery, reservationValues, (error, reservationResult) => {
+      if (error) {
+        reject(error)
+      }
+      else {
+        resolve(reservationResult)
+      }
+    })
+  })
+
+}
+
+
+
+// Function to find package rate
+const getPackageRate = async (packageID) => {
+  return new Promise((resolve, reject) => {
+    let sql = `SELECT basePrice as packageRate FROM package WHERE id = ?`
+    let values = [packageID]
+    connection.query(sql, values, (err, result) => {
+      if (err) {
+        reject(err)
+      }
+      else {
+        resolve(result[0]['packageRate'])
+      }
+    })
+  })
+}
+
+
+//Function to display rate summary
+const showRateSummary = async (rateSummary) => {
+  let packageID = rateSummary[0]['packageID'];
+  let PackageRate = await getPackageRate(packageID);
+
+  return new Promise((resolve, reject) => {
+    let finalRateSummary = [];
+    let totalRate = 0;
+    let totalRateWithTax = 0;
+    let totalTax = 0;
+    for (let i = 0; i < rateSummary.length; i++) {
+      let roomTax = 0;
+      let packageTax = 0;
+      let summary = {}; // Create a new summary object in each iteration
+      if ((rateSummary[i]['total'] + PackageRate) < 7500) {
+        roomTax = rateSummary[i]['total'] * 0.12;
+        packageTax = PackageRate * 0.12;
+      } else {
+        roomTax = rateSummary[i]['total'] * 0.18;
+        packageTax = PackageRate * 0.18;
+      }
+      totalRate = totalRate + rateSummary[i]['total'] + PackageRate;
+      totalTax = totalTax + roomTax + packageTax;
+      totalRateWithTax = totalRateWithTax + roomTax + packageTax + totalRate
+      summary['Date'] = rateSummary[i]['inventory_date'];
+      summary['baseprice'] = rateSummary[i]['baseprice'];
+      summary['childrenprice'] = rateSummary[i]['childrenprice'];
+      summary['extraadultprice'] = rateSummary[i]['extraadultprice'];
+      summary['packageCode'] = rateSummary[i]['packageCode'];
+      summary['roomType'] = rateSummary[i]['roomType'];
+      summary['roomRevenue'] = rateSummary[i]['total'];
+      summary['roomTax'] = roomTax;
+      summary['packageRevenue'] = PackageRate;
+      summary['packageTax'] = packageTax;
+      summary['subTotal'] = rateSummary[i]['total'] + PackageRate;
+      summary['totalTaxGenerated'] = roomTax + packageTax;
+      summary['total'] = roomTax + packageTax + rateSummary[i]['total'] + PackageRate;
+      summary['totalRate'] = totalRate;
+      summary['todtalRateWithTax'] = totalRateWithTax;
+      summary['totalTax'] = totalTax;
+
+
+
+      finalRateSummary.push(summary);
+      // console.log(summary);
+    }
+
+    // console.log(finalRateSummary);
+    resolve(finalRateSummary);
+  });
+};
+
+
+//API to show rate summary
+app.post('/showRateSummary', async (req, res) => {
+  try {
+    let { rateSummary } = req.body
+    console.log(rateSummary)
+    let result = await showRateSummary(rateSummary)
+    res.status(200).send({
+      status: 'Success',
+      statusCode: res.statusCode,
+      message: 'Successfully added sharingID',
+      data: result
+    })
+  }
+
+  catch (error) {
+    // console.log(error)
+    res.status(403).send({
+      status: 'Failed',
+      statusCode: res.statusCode,
+      message: 'Forbidden'
+    })
+  }
+
+})
+
+
+
+
+
+//  Update Reservation Status for reservation Table
+const UpdateRoomReservationStatus = async (reservationStatus, roomID) => {
+  return new Promise((resolve, reject) => {
+    const sql = `UPDATE room SET reservationStatus=? WHERE id=?`;
+    const values = [reservationStatus, roomID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+// Update Reservation Status Automatic
+const RoomReservationStatusAutoMatic = async (hotelID) => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT * from reservation WHERE hotelID=? and room is NOT NULL`;
+    const values = [hotelID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        // resolve(result);
+        for (let i = 0; i < result.length; i++) {
+          let changeStatus = RoomReservationStatus(result[i]['room'], result[i]['id'])
+          resolve(changeStatus)
+
+        }
+      }
+    });
+  });
+};
+
+
+
+// Update Reservation Status Automatic
+const RoomReservationStatus = async (roomID, reservationID) => {
+  let reservation = await getReservationByID(reservationID)
+  const Today = moment(new Date()).format("YYYY-MM-DD");
+  return new Promise((resolve, reject) => {
+
+    if (reservation[0]['arrivalDate'] = Today && reservation[0]['reservationStatus'] != 'Checked In') {
+      let result1 = UpdateRoomReservationStatus('Arrivals', roomID)
+      resolve(result1)
+    }
+    else if (reservation[0]['arrivalDate'] == Today && reservation[0]['reservationStatus'] === 'Checked In') {
+      let result1 = UpdateRoomReservationStatus('Arrived', roomID)
+      resolve(result1)
+    }
+    else if (reservation[0]['arrivalDate'] < Today && reservation[0]['departureDate'] > Today) {
+      let result1 = UpdateRoomReservationStatus('Stay Over', roomID)
+      resolve(result1)
+    }
+    else if (reservation[0]['arrivalDate'] === Today && reservation[0]['departureDate'] === Today && reservation[0]['reservationStatus'] === 'Checked In') {
+      let result1 = UpdateRoomReservationStatus('Day Use', roomID)
+      resolve(result1)
+    }
+    else if (reservation[0]['departureDate'] == Today && reservation[0]['reservationStatus'] === 'Checked In') {
+      let result1 = UpdateRoomReservationStatus('Due Out', roomID)
+      resolve(result1)
+    }
+    else if (reservation[0]['departureDate'] == Today && reservation[0]['reservationStatus'] === 'Checked Out') {
+      let result1 = UpdateRoomReservationStatus('Departed', roomID)
+      resolve(result1)
+    }
+
+
+  });
+
+};
+
+
+// Update Reservation Status Automatic
+app.put('/RoomReservationStatusAutoMatic', async (req, res) => {
+  try {
+    let { hotelID } = req.body
+    const result = await RoomReservationStatusAutoMatic(hotelID);
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "succesfully updated Room Status",
+      data: result
+    })
+  }
+  catch (error) {
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error,
+      data: error.message
+    })
+  }
+})
+
+// House keeoing status by multiple select room
+const updateMultipleRoomStatus = async (roomStatus, roomID) => {
+
+  console.log(roomID)
+  return new Promise((resolve, reject) => {
+    for (let i = 0; i < roomID.length; i++) {
+      const sql = `SELECT * from room where id=?`;
+      const values = [roomID[i]]
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+          if (result[0]['roomStatus'] === 'Out Of Order') {
+            reject(new Error("You have selected the Out Of Order room Number  please un check and continue"))
           }
-          for (i = 0; i < result.length; i++) {
-              let tax = 0;
-              if (result[i]['total'] < 1000) {
-                  tax = 0;
+          else if (result[0]['roomStatus'] === 'Out Of Service') {
+            reject(new Error("You have selected the Out Of Service room please un check and continue"))
+          }
+          else {
+            const sql = `UPDATE room SET roomStatus=? where id=?`;
+            const values = [roomStatus, roomID[i]]
+            console.log(values)
+            connection.query(sql, values, (error, result) => {
+              if (error) {
+                reject(error);
+              } else {
+                resolve(result);
               }
-              else if (1000 <= result[i]['total'] < 7500) {
-                  tax = result[i]['total'] * 0.12
+            });
+          }
+        }
+      });
+    }
+
+  });
+};
+
+// House keeoing status by multiple select room
+app.put('/updateMultipleRoomStatus', async (req, res) => {
+  try {
+    let { roomStatus, roomID } = req.body
+    const result = await updateMultipleRoomStatus(roomStatus, roomID);
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "succesfully updated Room Status",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: "Foridden",
+      data: error.message
+    })
+  }
+})
+
+
+const getOccupancy = async (hotelID) => {
+  return new Promise((resolve, reject) => {
+    const Today = moment(new Date()).format("YYYY-MM-DD");
+    const nextWeek = moment(Today).add(7, 'days').format("YYYY-MM-DD");
+    // const alldays = []
+
+    // for (let i = 0; i < 7; i++) {
+    //   const date = moment(Today).add(i, 'days').format("YYYY-MM-DD");
+    //   alldays.push(date);
+    // }
+
+    const alldays = ['2023-06-28', '2023-06-29', '2023-06-30', '2023-07-01', '2023-07-02', '2023-07-03', '2023-07-04']
+    let finalJSON = []
+    // console.log(nextWeek)
+    for (let i = 0; i < alldays.length; i++) {
+      const sql = `SELECT roomID,reservationID,mainReservationID,room.roomNumber,room.floorID FROM roomWiseInventory INNER JOIN room on room.id=roomWiseInventory.roomID where roomWiseInventory.occupancy_date=?`;
+      // const sql = `SELECT room.roomNumber,room.floorID, MAX(reservationID) AS reservationID, MAX(mainReservationID) AS mainReservationID, MAX(roomID) AS roomID, MAX(DATE_FORMAT(occupancy_date, '%Y-%m-%d')) AS occupancy_day FROM roomWiseInventory INNER JOIN room ON room.id = roomWiseInventory.roomID WHERE roomWiseInventory.hotelID = ? GROUP BY room.roomNumber, room.floorID`;
+      // const sql = `SELECT room.roomNumber, room.floorID, JSON_OBJECTAGG(DATE_FORMAT(occupancy_date, '%Y-%m-%d'), reservationID) AS occupancy_dates FROM roomWiseInventory INNER JOIN room ON room.id = roomWiseInventory.roomID WHERE roomWiseInventory.hotelID = ? GROUP BY room.roomNumber, room.floorID`;
+
+      const values = [alldays[i]]
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          reject(error);
+          console.log(error);
+        } else {
+          json = {}
+          // console.log(result);
+          console.log('===================================')
+          for (let j = 0; j < result.length; j++) {
+            // if(result[j]['reservationID'] === null){
+            //   result[j]['reservationID'] = 'Empty'
+            // }
+
+            // console.log(j)
+            // json['roomNo']= result[j]['roomID']
+            // json[alldays[i]] = result[j]['reservationID']
+            // console.log(json)
+            //   Object.entries(finalJSON).forEach(([key, value]) => {
+
+            //     if(key == result[j]['roomID']){
+
+            //     }
+
+            // });
+            // console.log(finalJSON.length)
+            if (finalJSON.length >= 257) {
+              // console.log(finalJSON.length)
+              finalJSON[j][alldays[i]] = result[j]['reservationID']
+              finalJSON.pop(j)
+              // console.log(finalJSON)
+
+            }
+            // if(finalJSON.length!=257){
+            //   finalJSON[j][alldays[i]] = result[j]['reservationID']
+            // }else{
+            finalJSON.push({ ['roomNo']: result[j]['roomNumber'], [alldays[i]]: result[j]['reservationID'], ['floorNo']: result[j]['floorID'] })
+
+            // }
+
+            // console.log(finalJSON)
+          }
+
+          // console.log(finalJSON)
+
+          if (i == 6) {
+            resolve(finalJSON);
+          }
+
+
+        }
+      });
+    }
+
+
+  });
+};
+// getOccupancy(1)
+app.get('/getOccupancy', async (req, res) => {
+  try {
+    let { hotelID } = req.query
+    const result = await getOccupancy(hotelID);
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "succesfully get occupancy",
+      data: result
+    })
+  }
+  catch (error) {
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error,
+      data: error.message
+    })
+  }
+})
+
+
+
+
+
+
+
+///This is the Function to add extras for reservation////////
+const ModifyBookingInformation = async (ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, tempReservationID) => {
+  console.log("bookingInfo")
+  return new Promise((resolve, reject) => {
+    const sql = `UPDATE tempExtra SET ETA=?, ETD=?,resType=?,origin=?,agent=?,source=?,booker=?,market=?, comment=?, billingInstructions=?,features=? where reservationID=?`;
+    const values = [ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, tempReservationID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+
+const ModifyBookingInfoReservation = async (ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, reservationID) => {
+  console.log("bookingInfoRes")
+  return new Promise((resolve, reject) => {
+    const sql = `UPDATE reservation SET ETA=?, ETD=?,reservationTypeID=?,origin=?,agentID=?,sourceID=?,bookerID=?,marketID=?, comments=?, billingInstruction=? where id=?`;
+    const values = [ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, reservationID]
+    console.log(values)
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+
+// Delete Reservation Extra
+const deleteReservationExtras = async (reservationID) => {
+  console.log("deleteresextra")
+  return new Promise((resolve, reject) => {
+    let sql = `DELETE FROM reservationExtras WHERE reservationID=?`
+    let values = [reservationID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        resolve(result)
+      }
+    })
+  })
+}
+
+// Add Reservaton Extras
+const addReservationExtras = async (reservationID, extras) => {
+  console.log("addresextra")
+  const deleteResExtra = await deleteReservationExtras(reservationID)
+  return new Promise((resolve, reject) => {
+    for (let i = 0; i < extras.length; i++) {
+      let sql = `INSERT INTO reservationExtras (reservationID, extraID) VALUES(?,?)`
+      let values = [reservationID, extras[i]]
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          console.log(error)
+          reject(error);
+        }
+        else {
+          resolve(result)
+        }
+      })
+    }
+  })
+}
+
+// Delete Reservation Extra
+const deleteReservationPreferences = async (reservationID) => {
+  console.log("deleterespref")
+  return new Promise((resolve, reject) => {
+    let sql = `DELETE FROM reservationPreferences WHERE reservationID=?`
+    let values = [reservationID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        resolve(result)
+      }
+    })
+  })
+}
+
+// Add Reservaton Extras
+const addReservationPreferences = async (features, reservationID) => {
+  console.log("addrespref")
+  console.log(features, reservationID)
+  const deleteResPreferences = await deleteReservationPreferences(reservationID)
+  return new Promise((resolve, reject) => {
+    let sql = `INSERT INTO reservationPreferences (preferenceID, reservationID) VALUES(?,?)`
+    let values = [features, reservationID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        resolve(result)
+      }
+    })
+
+  })
+}
+
+
+//API to update Reservation Details
+app.put('/ModifyBookingInformation', async (req, res) => {
+  try {
+    const { ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, tempReservationID, reservationID, extras } = req.body;
+    console.log(ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, tempReservationID, reservationID, extras)
+    const bookingInfo = await ModifyBookingInformation(ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, tempReservationID);
+    const updateRes = await ModifyBookingInfoReservation(ETA, ETD, resType, origin, agent, source, booker, market, comment, billingInstructions, features, reservationID);
+    const addResExtra = await addReservationExtras(reservationID, extras)
+    const addResPrefer = await addReservationPreferences(features, reservationID)
+    res.status(200).send({
+      status: 'success',
+      statuscode: res.statusCode,
+      message: "Succesfully updated Booking Information",
+      data: bookingInfo
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: "Forbidden"
+    })
+  }
+});
+
+
+// // get DailyDetails
+// const fetchDailyDetails = async (fromDate,toDate, reservationID) => {
+//   return new Promise((resolve, reject) => {
+//       let sql = `SELECT date,dailyDetails.roomTypeID,roomType.roomType,rateCodeID,rateCode.rateCode,package.packageCode,dailyDetails.packageID,packageRate,roomRate,totalRate,adults,children,marketCode.marketCode,source.sourceCode FROM dailyDetails INNER join roomType on roomType.id=dailyDetails.roomTypeID
+//       INNER JOIN rateCode on dailyDetails.rateCodeID=rateCode.id
+//       INNER JOIN marketCode ON marketCode.id=dailyDetails.marketID
+//       INNER JOIN source on source.id=dailyDetails.sourceID
+//       INNER JOIN package on package.id=dailyDetails.packageID
+//       WHERE date BETWEEN ? AND ? AND reservationID=?`
+//       let values = [fromDate,toDate, reservationID]
+//       connection.query(sql, values, (error, result) => {
+//         if (error) {
+//           console.log(error)
+//           reject(error);
+//         }
+//         else {
+//           const modifiedResult = result.map((row) => {
+//             const date = moment(row.date).format('YYYY-MM-DD');
+//             return {
+//               ...row,
+//               date
+//             };
+//           });
+//           resolve(modifiedResult)
+//         }
+//       })
+
+//   })
+// }
+
+
+
+// get DailyDetails
+app.post('/fetchDailyDetails', async (req, res) => {
+  try {
+    const { fromDate, toDate, reservationID } = req.body
+    console.log(fromDate, toDate, reservationID)
+    const result = await fetchDailyDetails(fromDate, toDate, reservationID)
+    res.status(200).send({
+      status: 'success',
+      statuscode: res.statusCode,
+      message: "Succesfully get Daily Details",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: "Forbidden"
+    })
+  }
+});
+
+
+// get DailyDetails
+const fetchDailyDetails = async (fromDate, toDate, reservationID) => {
+  return new Promise((resolve, reject) => {
+    let sql = `SELECT inventory_date,bookingInformation.roomTypeID,roomType.roomType,rateCodeID,rateCode.rateCode,package.packageCode,bookingInformation.packageID,packageRate,bookingInformation.baseprice,total,adults,children,marketCode.marketCode,source.sourceCode FROM bookingInformation INNER join roomType on roomType.id=bookingInformation.roomTypeID
+      INNER JOIN rateCode on bookingInformation.rateCodeID=rateCode.id
+      INNER JOIN marketCode ON marketCode.id=bookingInformation.marketID
+      INNER JOIN source on source.id=bookingInformation.sourceID
+      INNER JOIN package on package.id=bookingInformation.packageID
+      WHERE inventory_date BETWEEN ? AND ? AND reservationID=?`
+    let values = [fromDate, toDate, reservationID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        const modifiedResult = result.map((row) => {
+          const inventory_date = moment(row.inventory_date).format('YYYY-MM-DD');
+          return {
+            ...row,
+            inventory_date
+          };
+        });
+        resolve(modifiedResult)
+      }
+    })
+
+  })
+}
+
+
+// check ratec code in account rateCode mapping
+const checkRateCode = async (rateCodeID) => {
+  return new Promise((resolve, reject) => {
+    let sql = `SELECT rateCodeID FROM accountRateCodeMapping WHERE rateCodeID=?`
+    let values = [rateCodeID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        resolve(result)
+      }
+    })
+
+  })
+}
+
+/// This is the function to get Daily Details from the Database
+const getDailyDetailsByRateCodeID = async (rateCodeID, reservationID) => {
+  return new Promise((resolve, reject) => {
+    let query = `SELECT * FROM dailyDetails where rateCodeID = ? and reservationID=?`
+    let values = [rateCodeID, reservationID]
+    connection.query(query, values, (err, result) => {
+      if (err) {
+        reject(err)
+      }
+      else {
+        resolve(result)
+      }
+    })
+  })
+}
+
+
+const getPackageIDFromPackageCode = async (packageCode) => {
+  return new Promise((resolve, reject) => {
+    let sql = `SELECT id FROM package WHERE packageCode = ?`
+    let values = [packageCode]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        console.log(error)
+        reject(error);
+      }
+      else {
+        resolve(result[0]['id'])
+      }
+    })
+  })
+}
+
+
+// modify package
+const modifyPackage = async (rateCodeID, packageID, reservationID, dailyDetailsDate, Adults, Childrens, source, roomTypeID) => {
+  console.log(rateCodeID, packageID, reservationID)
+  const RateCodeCheck = await checkRateCode(rateCodeID)
+  const packageRate = await getPackageById(packageID)
+  const dailyDetailsByRateCodeID = await getDailyDetailsByRateCodeID(rateCodeID, reservationID)
+  var oneAdultRate = 0;
+  var oneChildrenRate = 0;
+
+  // Fit
+  if (source === '1') {
+    const ratesInventory = await getInventoryByDateRoomTypeID(dailyDetailsDate, roomTypeID)
+    oneAdultRate = ratesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = ratesInventory[0]['extraChildPrice'];
+  }
+  else {
+    const rateCodeRatesInventory = await getRateCodeRoomRateByRateCodeID(roomTypeID, rateCodeID)
+    oneAdultRate = rateCodeRatesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = rateCodeRatesInventory[0]['extraChildPrice'];
+    console.log(rateCodeRatesInventory)
+  }
+  return new Promise((resolve, reject) => {
+
+    if (RateCodeCheck.length === 0) {
+      // let totalRate = dailyDetailsByRateCodeID[0]['roomRate']+packageRate[0]['basePrice']*Adults;
+      let totalRate = oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + dailyDetailsByRateCodeID[0]['roomRate'] + packageRate[0]['basePrice'];
+      let sql = `UPDATE dailyDetails SET packageID=?,packageRate=?,totalRate=? where rateCodeID=? and reservationID=? and date=?`
+      let values = [packageID, packageRate[0]['basePrice'] * Adults, totalRate, rateCodeID, reservationID, dailyDetailsDate]
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          console.log(error)
+          reject(error);
+        }
+        else {
+          resolve(result)
+        }
+      })
+    }
+    else {
+      reject("For corporate rateCode you can't modify")
+    }
+
+  })
+}
+
+
+// modify package in dailydetails
+app.put('/modifyPackage', async (req, res) => {
+  try {
+    // let packageID;
+    const { rateCodeID, packageCode, reservationID, dailyDetailsDate, Adults, Childrens, source, roomTypeID } = req.body
+    const packageID = await getPackageIDFromPackageCode(packageCode)
+    // console.log(packageID)
+    // console.log(rateCodeID,packageID,reservationID,dailyDetailsDate)
+    const result = await modifyPackage(rateCodeID, packageID, reservationID, dailyDetailsDate, Adults, Childrens, source, roomTypeID)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully modify package",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+
+
+
+/// This is the function to get Inventory By Date Room TypeID
+const getInventoryByDateRoomTypeID = async (inventory_date, roomTypeID) => {
+  return new Promise((resolve, reject) => {
+    let query = `SELECT * FROM roomInventory where inventory_date = ? and roomTypeID=?`
+    let values = [inventory_date, roomTypeID]
+    connection.query(query, values, (err, result) => {
+      if (err) {
+        reject(err)
+      }
+      else {
+        resolve(result)
+      }
+    })
+  })
+}
+
+// get Rate Code Room Rate
+const getRateCodeRoomRateByRateCodeID = async (roomTypeID, rateCodeID) => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT * FROM rateCodeRoomRate where roomTypeID=? and rateCodeID=?`;
+    const values = [roomTypeID, rateCodeID]
+    connection.query(sql, values, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+
+// Adults and children modification
+const modifyAdultChildren = async (packageRate, Adults, Childrens, inventory_date, rateCodeID, roomTypeID, reservationID, source) => {
+  // console.log(Adults,Childrens,inventory_date,rateCodeID,roomTypeID,reservationID,source)
+  const dailyDetailsByRateCodeID = await getDailyDetailsByRateCodeID(rateCodeID, reservationID)
+  var oneAdultRate = 0;
+  var oneChildrenRate = 0;
+  // Fit
+  if (source === '1') {
+    const ratesInventory = await getInventoryByDateRoomTypeID(inventory_date, roomTypeID)
+    oneAdultRate = ratesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = ratesInventory[0]['extraChildPrice'];
+  }
+  else {
+    const rateCodeRatesInventory = await getRateCodeRoomRateByRateCodeID(roomTypeID, rateCodeID)
+    oneAdultRate = rateCodeRatesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = rateCodeRatesInventory[0]['extraChildPrice'];
+    console.log(rateCodeRatesInventory)
+  }
+  return new Promise((resolve, reject) => {
+
+    var totCount = 3;
+    if (Adults === 3) {
+      console.log("A3")
+      totCount = 3
+    }
+    else if (Adults === 2) {
+      console.log("A2")
+      totCount = 4
+    }
+    console.log(totCount)
+
+    if ((Adults + Childrens) > totCount) {
+      reject("Invalid Count")
+    }
+    else {
+      // resolve("Added")
+      const sql = `UPDATE dailyDetails SET totalRate=?, adults = ?, children = ? where reservationID=? and roomTypeID=? and rateCodeID=? and date = ?`;
+      const values = [oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + dailyDetailsByRateCodeID[0]['roomRate'] + packageRate, Adults, Childrens, reservationID, roomTypeID, rateCodeID, inventory_date]
+      // console.log(values, oneAdultRate, oneChildrenRate,Childrens,Adults)
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
+    }
+
+
+  })
+}
+
+
+// modify Adults and Childrens in dailydetails
+app.put('/modifyAdultChildren', async (req, res) => {
+  try {
+    const { packageRate, Adults, Childrens, inventory_date, rateCodeID, roomTypeID, reservationID, source } = req.body
+    const result = await modifyAdultChildren(packageRate, parseInt(Adults), parseInt(Childrens), inventory_date, rateCodeID, roomTypeID, reservationID, source)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully modify Adults and Childrens",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+
+
+// const ConfirmDailyRates =  async(packageRate, Adults,Childrens,inventory_date,rateCodeID,roomTypeID,reservationID,source,packageID)=>{
+//   const RateCodeCheck = await checkRateCode(rateCodeID)
+//   const packageRates = await getPackageById(packageID)
+//   var oneAdultRate = 0;
+//   var oneChildrenRate =0;
+//   const dailyDetailsByRateCodeID = await getDailyDetailsByRateCodeID(rateCodeID,reservationID)
+
+//   // Fit
+//   if(source === '1'){
+//     const ratesInventory = await getInventoryByDateRoomTypeID(inventory_date,roomTypeID)
+//     oneAdultRate = ratesInventory[0]['extraAdultPrice'];
+//     oneChildrenRate = ratesInventory[0]['extraChildPrice'];
+//   }
+//   else{
+//     const rateCodeRatesInventory = await getRateCodeRoomRateByRateCodeID(roomTypeID,rateCodeID)
+//     oneAdultRate = rateCodeRatesInventory[0]['extraAdultPrice'];
+//     oneChildrenRate = rateCodeRatesInventory[0]['extraChildPrice'];
+//   }
+//   return new Promise((resolve, reject) => {
+
+//     var totCount = 3;
+//     if(Adults===3){
+//       console.log("A3")
+//       totCount = 3
+//     }
+//     else if(Adults === 2){
+//       console.log("A2")
+//       totCount = 4
+//     }
+//     console.log(totCount)
+
+//     if((Adults+Childrens) > totCount){
+//       reject("Invalid Count")
+//     }
+//     else{
+//       // resolve("Added")
+//       const sql = `UPDATE dailyDetails SET totalRate=?, adults = ?, children = ? where reservationID=? and roomTypeID=? and rateCodeID=? and date = ?`;
+//       const values = [oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + dailyDetailsByRateCodeID[0]['roomRate'] + packageRates[0]['basePrice'], Adults, Childrens, reservationID,roomTypeID,rateCodeID, inventory_date ]
+//       // console.log(values, oneAdultRate, oneChildrenRate,Childrens,Adults)
+//       connection.query(sql, values, (error, result) => {
+//         if (error) {
+//           reject(error);
+//         } else {
+//           resolve(result);
+//         }
+//       });
+//     }
+
+//     if(RateCodeCheck.length===0){
+//       // let totalRate = dailyDetailsByRateCodeID[0]['roomRate']+packageRate[0]['basePrice']*Adults;
+//       let totalRate = oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + dailyDetailsByRateCodeID[0]['roomRate'] + packageRates[0]['basePrice'];
+//       let sql = `UPDATE dailyDetails SET packageID=?,packageRate=?,totalRate=? where rateCodeID=? and reservationID=? and date=?`
+//       let values = [packageID,packageRates[0]['basePrice']*Adults,totalRate,rateCodeID,reservationID,inventory_date]
+//       connection.query(sql, values, (error, result) => {
+//         if (error) {
+//           console.log(error)
+//           reject(error);
+//         }
+//         else {
+//           resolve(result)
+//         }
+//       })
+//     }
+//     else{
+//       reject("For corporate rateCode you can't modify")
+//     }
+
+
+//   })
+
+// }
+
+
+
+
+// modify Adults and Childrens in dailydetails
+
+
+app.put('/ConfirmDailyRates', async (req, res) => {
+  try {
+    const { packageCode, packageRate, Adults, Childrens, inventory_date, rateCodeID, roomTypeID, reservationID, source } = req.body
+    const packageID = await getPackageIDFromPackageCode(packageCode)
+    console.log(packageCode, packageRate, parseInt(Adults), parseInt(Childrens), inventory_date, rateCodeID, roomTypeID, reservationID, source, packageID)
+    const result = await ConfirmDailyRates(packageRate, parseInt(Adults), parseInt(Childrens), inventory_date, rateCodeID, roomTypeID, reservationID, source, packageID)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully modify Adults and Childrens and package",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+
+// to add into temp table booking information
+const modifyBookingInfoRates = async (packageRate, Adults, Childrens, inventory_date, rateCodeID, roomTypeID, reservationID, source, packageID, basePrice) => {
+  const RateCodeCheck = await checkRateCode(rateCodeID)
+  const packageRates = await getPackageById(packageID)
+  const bookingOldData = await getBookingInformation(reservationID)
+  var oneAdultRate = 0;
+  var oneChildrenRate = 0;
+  // const dailyDetailsByRateCodeID = await getDailyDetailsByRateCodeID(rateCodeID,reservationID)
+
+  // Fit
+  if (source === '1') {
+    const ratesInventory = await getInventoryByDateRoomTypeID(inventory_date, roomTypeID)
+    oneAdultRate = ratesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = ratesInventory[0]['extraChildPrice'];
+  }
+  else {
+    const rateCodeRatesInventory = await getRateCodeRoomRateByRateCodeID(roomTypeID, rateCodeID)
+    oneAdultRate = rateCodeRatesInventory[0]['extraAdultPrice'];
+    oneChildrenRate = rateCodeRatesInventory[0]['extraChildPrice'];
+  }
+  return new Promise((resolve, reject) => {
+
+    var totCount = 3;
+    if (Adults === 3) {
+      console.log("A3")
+      totCount = 3
+    }
+    else if (Adults === 2) {
+      console.log("A2")
+      totCount = 4
+    }
+    console.log(totCount)
+
+    if ((Adults + Childrens) > totCount) {
+      reject("Invalid Count")
+    }
+    else {
+      console.log("-----------------")
+      // if(bookingOldData[0]['adults'] !== Adults || bookingOldData[0]['children'] !== Childrens){
+      let totalRate = oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + basePrice + packageRates[0]['basePrice'];
+
+      const sql = `UPDATE bookingInformation SET total=?, adults = ?, children = ?,packageRate=?, packageID=? where reservationID=? and roomTypeID=? and rateCodeID=? and inventory_date = ?`;
+      const values = [totalRate, Adults, Childrens, packageRates[0]['basePrice'] * Adults, packageID, reservationID, roomTypeID, rateCodeID, inventory_date]
+      console.log(values)
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
+      // }
+    }
+
+    if (RateCodeCheck.length === 0) {
+      console.log("===============")
+      let totalRate = oneAdultRate * (Adults - 1) + oneChildrenRate * Childrens + basePrice + packageRates[0]['basePrice'];
+      let sql = `UPDATE bookingInformation SET packageID=?,packageRate=?,total=?,adults = ?, children = ? where rateCodeID=? and reservationID=? and inventory_date=?`
+      let values = [packageID, packageRates[0]['basePrice'] * Adults, totalRate, Adults, Childrens, rateCodeID, reservationID, inventory_date]
+      console.log(values)
+
+      connection.query(sql, values, (error, result) => {
+        if (error) {
+          console.log(error)
+          reject(error);
+        }
+        else {
+          resolve(result)
+        }
+      })  
+    }
+    // else {
+    //   reject("For corporate rateCode you can't modify")
+    // }
+    // }
+
+  })
+
+}
+
+// to modify dailydetails rates
+app.put('/modifyBookingInfoRates', async (req, res) => {
+  try {
+    const { packageCode, packageRate, Adults, Childrens, inventory_date, rateCodeID, roomTypeID, reservationID, source, basePrice } = req.body
+    const packageID = await getPackageIDFromPackageCode(packageCode)
+    console.log(packageCode, packageRate, parseInt(Adults), parseInt(Childrens), inventory_date, rateCodeID, roomTypeID, reservationID, source, packageID)
+    const result = await modifyBookingInfoRates(packageRate, parseInt(Adults), parseInt(Childrens), inventory_date, rateCodeID, roomTypeID, reservationID, source, packageID, basePrice)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully modify Adults and Childrens and package",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+
+
+
+//  retrive rates
+const retriveRates = async (reservationID,rateCodeID,fromDate,toDate) => {
+  return new Promise((resolve, reject) => {
+    let sql = 'SELECT * from dailyDetails where reservationID=? and rateCodeID=? and date between ? and ?'
+    let values = [reservationID,rateCodeID,fromDate,toDate]
+    connection.query(sql,values,(error,result) =>{
+      if(error){
+        reject(error)
+      }
+      else{
+        resolve(result)
+      }
+    })
+  })
+}
+
+// retrive rates
+const cancelRates = async (retriveRate, rateCodeID, reservationID, tempReservationID, fromDate, toDate) => {
+  return new Promise((resolve, reject) => {
+
+    for(let i=0; i<retriveRate.length; i++){
+        let packageID = retriveRate[i]['packageID']
+        let packageRate = retriveRate[i]['packageRate']
+        let basePrice = retriveRate[i]['roomRate']
+        let adults = retriveRate[i]['adults']
+        let children = retriveRate[i]['children']
+        let total = retriveRate[i]['totalRate']
+        let rateCodeID = retriveRate[i]['rateCodeID']
+        let inventory_date = retriveRate[i]['date']
+
+
+
+        let sql = 'UPDATE bookingInformation SET packageID=?,packageRate=?,baseprice=?,adults=?,children=?,total=? where reservationID=? and rateCodeID=? and inventory_date =?'
+        let values = [packageID, packageRate, basePrice, adults, children, total, tempReservationID, rateCodeID, inventory_date]
+        connection.query(sql, values, (error, result) => {
+          if (error) {
+            reject(error)
+          }
+          else {
+            resolve(result)
+          }
+        })
+  }
+  })
+}
+
+// retrive rates
+app.put('/cancelRates', async (req, res) => {
+  try {
+    const { rateCodeID, reservationID, tempReservationID, fromDate, toDate } = req.body
+    const retriveRate = await retriveRates(reservationID,rateCodeID,fromDate,toDate)
+    const result = await cancelRates(retriveRate ,rateCodeID, reservationID, tempReservationID, fromDate, toDate)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully retrived the rates",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+
+
+
+
+
+
+
+
+
+//  update daily rates
+const updateDailyDetailsRates = async (result,sharingID,reservationID) => {
+    const deleteRateSummaryRates = await deleteRateSummary(reservationID)
+    const deleteResTaxes = await deleteResTax(reservationID)
+    return new Promise((resolve, reject) => {
+      for (i = 0; i < result.length; i++) {
+        let j = i
+        let roomTax = 0;
+        let packageTax = 0;
+        if ((result[i]['total'] + result[i]['packageRate']) < 7500) {
+          roomTax = result[i]['total'] * 0.12
+          packageTax = result[i]['packageRate'] * 0.12
+        }
+        else {
+          roomTax = result[i]['total'] * 0.18
+          packageTax = result[i]['packageRate'] * 0.18
+        }
+        let totalTaxGenerated = roomTax + packageTax
+        let totalRate = result[i]['total'] + result[i]['packageRate']
+        let total = totalRate + totalTaxGenerated
+  // console.log(result[i]['bookingPackageID'])
+        let dailyDetailsQuery = `UPDATE dailyDetails SET packageID=?,packageRate=?,roomRate=?,adults=?,children=?,totalRate=? where reservationID=? and rateCodeID=? and date = ?`
+        let dailyDetailsValues = [result[i]['bookingPackageID'],result[i]['packageRate'],result[i]['baseprice'],result[i]['Adults'],result[i]['Childrens'], result[i]['total'],(reservationID),result[i]['rateCodeID'], result[i]['inventory_date']]
+        connection.query(dailyDetailsQuery, dailyDetailsValues, (error, dailyDetailsResult) => {
+          if (error) {
+            reject(error)
+          }
+          else {
+            console.log(result[j])
+            let sql = `SELECT id from dailyDetails where reservationID=? and rateCodeID=? and date = ?`
+            let values = [reservationID,result[j]['rateCodeID'], result[j]['inventory_date']]
+            connection.query(sql, values, (error, lastID) => {
+              if (error) {
+                reject(error)
               }
               else {
-                  tax = result[i]['total'] * 0.18
+                console.log(lastID[0]['id'])
+                addRateSummaryOfReservation(reservationID, result[j]['inventory_date'], result[j]['rateCodeID'], lastID[0]['id'], result[j]['total'], roomTax, result[j]['packageRate'], packageTax, totalRate, totalTaxGenerated, total, sharingID)
+            resolve(lastID)
               }
-              totaltax = totaltax + tax
+            })
           }
-          
-          let stayTotal = totalBaseAmount + totaltax;
-          let totalCostOfStay = stayTotal * result[0]['quantity']
+        })
+      } 
+      
+    })
+}
 
-          const reservationQuery = `UPDATE reservation SET(rate, totalBaseAmount, totalTax, stayTotal, totalCostOfStay) VALUES(?,?,?,?,?) where id=?`
 
-          const reservationValues = [result[0]['baseprice'], totalBaseAmount,totaltax, stayTotal, totalCostOfStay, reservationID]
 
-          connection.query(reservationQuery, reservationValues, (error, reservationResult) => {
-              if (error) {
-                  reject(error)
-              }
-              else {  
-                  resolve(reservationResult)
-              }
-          })
-      })
-  
+
+
+
+//  update daily rates
+app.put('/updateDailyDetailsRates', async (req, res) => {
+  try {
+    const { tempReservationID,reservationID,sharingID} = req.body
+    const data = await getCompleteReservation(tempReservationID)
+    const result = await updateDailyDetailsRates(data,reservationID,sharingID)
+    res.status(200).send({
+      status: 'success',
+      statusCode: res.statusCode,
+      message: "Succesfully retrived the rates",
+      data: result
+    })
+  }
+  catch (error) {
+    console.log(error)
+    res.status(403).send({
+      status: "Failed",
+      statusCode: 403,
+      message: error
+    })
+  }
+});
+
+//Function to update Main Reservation
+const updateReservationRates = async (result, reservationID) => {
+  return new Promise((resolve, reject) => {
+    let totaltax = 0;
+    let totalBaseAmount = 0;
+
+
+
+    for (j = 0; j < result.length; j++) {
+      totalBaseAmount += result[j]['total']
+    }
+    for (i = 0; i < result.length; i++) {
+      let tax = 0;
+      if (result[i]['total'] < 1000) {
+        tax = 0;
+      }
+      else if (1000 <= result[i]['total'] < 7500) {
+        tax = result[i]['total'] * 0.12
+      }
+      else {
+        tax = result[i]['total'] * 0.18
+      }
+      totaltax = totaltax + tax
+    }
+
+    let stayTotal = totalBaseAmount + totaltax;
+    let totalCostOfStay = stayTotal * result[0]['quantity']
+
+    const reservationQuery = `UPDATE reservation SET rate=?,totalBaseAmount=?,totalTax=?,stayTotal=?, totalCostOfStay=? where id=?`
+
+    const reservationValues = [result[0]['baseprice'], totalBaseAmount, totaltax, stayTotal, totalCostOfStay, reservationID]
+
+    connection.query(reservationQuery, reservationValues, (error, reservationResult) => {
+      if (error) {
+        reject(error)
+      }
+      else {
+        resolve(reservationResult)
+      }
+    })
+  })
+
+}
+
+
+//Function to add Daily Details of Main reservation
+const addRateSummaryRates = async (reservationID, date, rateCode, dailyDetailsID, roomRevenue, roomTax, packageRate, packageTax, subTotal, totalTaxGenerated, total, lastID) => {
+  return new Promise((resolve, reject) => {
+    let rateSummaryQuery = `INSERT INTO rateSummary(reservationID, date, rateCodeID, dailyDetailsID, roomRevenue, roomTax, packageRevenue, packageTax, subTotal, totalTaxGenerated, total, sharingID, isPosted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    let rateSummaryValues = [reservationID, date, rateCode, dailyDetailsID, roomRevenue, roomTax, packageRate, packageTax, subTotal, totalTaxGenerated, total, lastID, 0]
+    connection.query(rateSummaryQuery, rateSummaryValues, (error, rateSummaryResult) => {
+      if (error) {
+        console.log(error)
+        reject(error)
+      }
+      else {
+        addTaxDetailsOfReservation(subTotal, date, reservationID, dailyDetailsID, totalTaxGenerated)
+        resolve(rateSummaryResult.insertId)
+      }
+    })
+  })
 }
